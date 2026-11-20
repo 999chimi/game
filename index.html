@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>中国象棋</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+    background: radial-gradient(circle at top, #f7efd9 0%, #ead9b1 45%, #d9bd8c 100%);
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:14px;
+    min-height:100vh;
+}
+h1{
+    font-size:24px;
+    color:#3b2a12;
+    margin-bottom:4px;
+    letter-spacing:2px;
+}
+#tip{
+    font-size:15px;
+    color:#5b4420;
+    margin-bottom:10px;
+}
+#tip strong{
+    color:#c81623;
+}
+.wrap{
+    background: linear-gradient(180deg, #e9c57a 0%, #d9a755 100%);
+    padding:14px 12px 12px;
+    border-radius:18px;
+    box-shadow: 0 10px 30px rgba(90, 60, 20, 0.35), inset 0 0 0 2px rgba(255,255,255,0.3);
+}
+#canvas{
+    display:block;
+    border-radius:14px;
+    background:#e6b961;
+    box-shadow: inset 0 0 0 1px rgba(120, 70, 20, 0.45), inset 0 0 18px rgba(120, 70, 20, 0.25);
+}
+.btn-row{
+    margin-top:16px;
+    display:flex;
+    gap:12px;
+}
+button{
+    flex:1;
+    padding:12px 18px;
+    border:none;
+    border-radius:10px;
+    color:#fff;
+    font-size:16px;
+    font-weight:bold;
+    cursor:pointer;
+}
+#undoBtn{
+    background:linear-gradient(180deg,#6b7a3a,#3f4a21);
+    box-shadow:0 6px 14px rgba(60,80,30,0.45);
+}
+#restartBtn{
+    background:linear-gradient(180deg,#d94343,#a81717);
+    box-shadow:0 6px 14px rgba(168,23,23,0.45);
+}
+button:active{
+    transform:translateY(1px);
+}
+
+/* 胜利弹窗 */
+.mask{
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.55);
+    display:none;
+    align-items:center;
+    justify-content:center;
+    z-index:99;
+}
+.dialog{
+    background:linear-gradient(180deg,#fff,#f7ecd0);
+    padding:30px 22px;
+    border-radius:20px;
+    width:80%;
+    max-width:320px;
+    text-align:center;
+    border:3px solid #d9a755;
+    box-shadow:0 14px 40px rgba(0,0,0,0.3);
+}
+.dialog h2{
+    font-size:26px;
+    color:#c81623;
+    margin-bottom:8px;
+}
+.dialog p{
+    font-size:16px;
+    color:#4a3518;
+    margin-bottom:18px;
+}
+.dialog button{
+    width:100%;
+}
+</style>
+</head>
+
+<body>
+<h1>中国象棋</h1>
+<div id="tip">轮到 <strong>红方</strong> 走棋</div>
+
+<div class="wrap">
+    <canvas id="canvas"></canvas>
+</div>
+
+<div class="btn-row">
+    <button id="undoBtn" onclick="undoMove()">悔棋</button>
+    <button id="restartBtn" onclick="restartGame()">重开</button>
+</div>
+
+<div class="mask" id="winMask">
+    <div class="dialog">
+        <h2>胜利！</h2>
+        <p id="winText"></p>
+        <button onclick="restartGame()">再来一局</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const tipDom = document.getElementById('tip');
+const winMask = document.getElementById('winMask');
+const winText = document.getElementById('winText');
+
+let cellSize;
+let board = [];
+let turn = 'red';
+let sel = null;
+let hintList = [];
+let history = [];
+
+const initBoard = [
+    [{n:'車',c:'black'},{n:'馬',c:'black'},{n:'象',c:'black'},{n:'士',c:'black'},{n:'將',c:'black'},{n:'士',c:'black'},{n:'象',c:'black'},{n:'馬',c:'black'},{n:'車',c:'black'}],
+    [0,0,0,0,0,0,0,0,0],
+    [0,{n:'砲',c:'black'},0,0,0,0,0,{n:'砲',c:'black'},0],
+    [{n:'卒',c:'black'},0,{n:'卒',c:'black'},0,{n:'卒',c:'black'},0,{n:'卒',c:'black'},0,{n:'卒',c:'black'}],
+    [0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0],
+    [{n:'兵',c:'red'},0,{n:'兵',c:'red'},0,{n:'兵',c:'red'},0,{n:'兵',c:'red'},0,{n:'兵',c:'red'}],
+    [0,{n:'炮',c:'red'},0,0,0,0,0,{n:'炮',c:'red'},0],
+    [0,0,0,0,0,0,0,0,0],
+    [{n:'車',c:'red'},{n:'馬',c:'red'},{n:'相',c:'red'},{n:'士',c:'red'},{n:'帥',c:'red'},{n:'士',c:'red'},{n:'相',c:'red'},{n:'馬',c:'red'},{n:'車',c:'red'}]
+];
+
+function resizeCanvas(){
+    const maxW = Math.min(380, window.innerWidth - 40);
+    canvas.width = maxW;
+    canvas.height = maxW * 10 / 9;
+    cellSize = canvas.width / 9;
+}
+
+function drawPalaceDiagonal(baseRow){
+    const x0 = 3 * cellSize + cellSize / 2;
+    const x2 = 5 * cellSize + cellSize / 2;
+    const y0 = baseRow * cellSize + cellSize / 2;
+    const y2 = (baseRow + 2) * cellSize + cellSize / 2;
+
+    ctx.strokeStyle = 'rgba(120, 70, 20, 0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(x2, y0);
+    ctx.lineTo(x0, y2);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+}
+
+function drawBoard(){
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = 'rgba(120, 70, 20, 0.9)';
+    ctx.lineWidth = 1.5;
+
+    // 普通横线，河界两行跳过
+    for(let r = 0; r < 10; r++){
+        if(r === 4 || r === 5) continue;
+        const y = r * cellSize + cellSize / 2;
+        ctx.beginPath();
+        ctx.moveTo(cellSize / 2, y);
+        ctx.lineTo(canvas.width - cellSize / 2, y);
+        ctx.stroke();
+    }
+
+    // 内部竖线，河间断开
+    for(let c = 1; c <= 7; c++){
+        const x = c * cellSize + cellSize / 2;
+        ctx.beginPath();
+        ctx.moveTo(x, cellSize / 2);
+        ctx.lineTo(x, 4 * cellSize + cellSize / 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x, 5 * cellSize + cellSize / 2);
+        ctx.lineTo(x, 9 * cellSize + cellSize / 2);
+        ctx.stroke();
+    }
+
+    // 四条黑色框线（去掉黄色）
+    ctx.strokeStyle = 'rgba(40, 25, 0, 1)';
+    ctx.lineWidth = 2.2;
+
+    // 黑卒那根横线
+    ctx.beginPath();
+    ctx.moveTo(cellSize / 2, 4 * cellSize + cellSize / 2);
+    ctx.lineTo(canvas.width - cellSize / 2, 4 * cellSize + cellSize / 2);
+    ctx.stroke();
+
+    // 红兵那根横线
+    ctx.beginPath();
+    ctx.moveTo(cellSize / 2, 5 * cellSize + cellSize / 2);
+    ctx.lineTo(canvas.width - cellSize / 2, 5 * cellSize + cellSize / 2);
+    ctx.stroke();
+
+    // 最左竖线
+    ctx.beginPath();
+    ctx.moveTo(cellSize / 2, cellSize / 2);
+    ctx.lineTo(cellSize / 2, 9 * cellSize + cellSize / 2);
+    ctx.stroke();
+
+    // 最右竖线
+    ctx.beginPath();
+    ctx.moveTo(canvas.width - cellSize / 2, cellSize / 2);
+    ctx.lineTo(canvas.width - cellSize / 2, 9 * cellSize + cellSize / 2);
+    ctx.stroke();
+
+    drawPalaceDiagonal(0);
+    drawPalaceDiagonal(7);
+}
+
+function drawPieces(){
+    for(let r = 0; r < 10; r++){
+        for(let c = 0; c < 9; c++){
+            const p = board[r][c];
+            if(!p) continue;
+
+            const x = c * cellSize + cellSize / 2;
+            const y = r * cellSize + cellSize / 2;
+            const rCircle = cellSize * 0.4;
+
+            if(sel && sel[0] === r && sel[1] === c){
+                ctx.beginPath();
+                ctx.arc(x, y, rCircle + 5, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.55)';
+                ctx.fill();
+            }
+
+            ctx.beginPath();
+            ctx.arc(x, y, rCircle, 0, Math.PI * 2);
+            ctx.fillStyle = '#fffaf0';
+            ctx.fill();
+            ctx.strokeStyle = p.c === 'red' ? '#c81623' : '#2b1d0c';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(x, y, rCircle - 4, 0, Math.PI * 2);
+            ctx.strokeStyle = p.c === 'red' ? 'rgba(200,22,35,0.4)' : 'rgba(43,29,12,0.35)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            ctx.fillStyle = p.c === 'red' ? '#c81623' : '#2b1d0c';
+            ctx.font = `bold ${cellSize * 0.62}px "SimHei", "Microsoft Yahei", "PingFang SC", sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(p.n, x, y + 1);
+        }
+    }
+
+    for(const [r, c] of hintList){
+        const x = c * cellSize + cellSize / 2;
+        const y = r * cellSize + cellSize / 2;
+        const has = board[r][c];
+
+        if(has){
+            ctx.beginPath();
+            ctx.arc(x, y, cellSize * 0.3, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(200, 22, 35, 0.85)';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }else{
+            ctx.beginPath();
+            ctx.arc(x, y, cellSize * 0.13, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(200, 22, 35, 0.75)';
+            ctx.fill();
+        }
+    }
+}
+
+function render(){
+    drawBoard();
+    drawPieces();
+    tipDom.innerHTML = '轮到 <strong>' + (turn === 'red' ? '红方' : '黑方') + '</strong> 走棋';
+}
+
+function findKing(){
+    let redKing = null, blackKing = null;
+    for(let r = 0; r < 10; r++){
+        for(let c = 0; c < 9; c++){
+            const p = board[r][c];
+            if(p){
+                if(p.n === '帥') redKing = {r, c};
+                if(p.n === '將') blackKing = {r, c};
+            }
+        }
+    }
+    return {redKing, blackKing};
+}
+
+function willFaceKing(sr, sc, tr, tc){
+    const temp = board[tr][tc];
+    board[tr][tc] = board[sr][sc];
+    board[sr][sc] = 0;
+
+    const {redKing, blackKing} = findKing();
+    let bad = false;
+
+    if(redKing && blackKing && redKing.c === blackKing.c){
+        const minR = Math.min(redKing.r, blackKing.r);
+        const maxR = Math.max(redKing.r, blackKing.r);
+        let block = false;
+        for(let rr = minR + 1; rr < maxR; rr++){
+            if(board[rr][redKing.c]){
+                block = true;
+                break;
+            }
+        }
+        if(!block) bad = true;
+    }
+
+    board[sr][sc] = board[tr][tc];
+    board[tr][tc] = temp;
+    return bad;
+}
+
+function clickCanvas(e){
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const col = Math.floor(px / cellSize);
+    const row = Math.floor(py / cellSize);
+
+    if(col < 0 || col >= 9 || row < 0 || row >= 10) return;
+    const piece = board[row][col];
+
+    if(piece && piece.c === turn){
+        sel = [row, col];
+        hintList = calcMove(row, col);
+        render();
+        return;
+    }
+
+    if(sel && hintList.some(v => v[0] === row && v[1] === col)){
+        if(willFaceKing(sel[0], sel[1], row, col)) return;
+        doMove(row, col);
+    }
+}
+
+function saveHistory(){
+    history.push({
+        board: JSON.parse(JSON.stringify(board)),
+        turn: turn,
+        sel: sel ? [...sel] : null,
+        hintList: hintList.map(h => [...h])
+    });
+}
+
+function doMove(tr, tc){
+    if(!sel) return;
+    saveHistory();
+    const sr = sel[0];
+    const sc = sel[1];
+    const target = board[tr][tc];
+
+    board[tr][tc] = board[sr][sc];
+    board[sr][sc] = 0;
+
+    if(target && (target.n === '帥' || target.n === '將')){
+        showWin(turn === 'red' ? '红方' : '黑方');
+        return;
+    }
+    turn = turn === 'red' ? 'black' : 'red';
+    sel = null;
+    hintList = [];
+    render();
+}
+
+function undoMove(){
+    if(history.length === 0) return;
+    const last = history.pop();
+    board = last.board;
+    turn = last.turn;
+    sel = last.sel;
+    hintList = last.hintList;
+    winMask.style.display = 'none';
+    render();
+}
+
+function showWin(winner){
+    winText.innerText = winner + " 韦老师真厉害！";
+    winMask.style.display = 'flex';
+}
+
+function calcMove(r, c){
+    const p = board[r][c];
+    const pc = p.c;
+    const pn = p.n;
+    const moves = [];
+
+    function add(nr, nc){
+        if(nr < 0 || nr >= 10 || nc < 0 || nc >= 9) return;
+        const t = board[nr][nc];
+        if(t && t.c === pc) return;
+        moves.push([nr, nc]);
+    }
+
+    switch(pn){
+        case '帥':
+        case '將':
+            [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]].forEach(([nr, nc]) => {
+                if(nc >= 3 && nc <= 5){
+                    if(pc === 'red' && nr >= 7 && nr <= 9) add(nr, nc);
+                    if(pc === 'black' && nr >= 0 && nr <= 2) add(nr, nc);
+                }
+            });
+            break;
+        case '士':
+            [[r - 1, c - 1], [r - 1, c + 1], [r + 1, c - 1], [r + 1, c + 1]].forEach(([nr, nc]) => {
+                if(nc >= 3 && nc <= 5){
+                    if(pc === 'red' && nr >= 7 && nr <= 9) add(nr, nc);
+                    if(pc === 'black' && nr >= 0 && nr <= 2) add(nr, nc);
+                }
+            });
+            break;
+        case '相':
+        case '象':
+            [
+                [-2, -2, -1, -1],
+                [-2, 2, -1, 1],
+                [2, -2, 1, -1],
+                [2, 2, 1, 1]
+            ].forEach(([dr, dc, br, bc]) => {
+                const nr = r + dr;
+                const nc = c + dc;
+                const brr = r + br;
+                const bcc = c + bc;
+                if(nr < 0 || nr >= 10 || nc < 0 || nc >= 9) return;
+                if(board[brr][bcc]) return;
+                if(pc === 'red' && nr >= 5) add(nr, nc);
+                if(pc === 'black' && nr <= 4) add(nr, nc);
+            });
+            break;
+        case '馬':
+            [
+                [-2, -1, -1, 0],
+                [-2, 1, -1, 0],
+                [-1, -2, 0, -1],
+                [-1, 2, 0, 1],
+                [1, -2, 0, -1],
+                [1, 2, 0, 1],
+                [2, -1, 1, 0],
+                [2, 1, 1, 0]
+            ].forEach(([dr, dc, br, bc]) => {
+                const nr = r + dr;
+                const nc = c + dc;
+                const brr = r + br;
+                const bcc = c + bc;
+                if(nr < 0 || nr >= 10 || nc < 0 || nc >= 9) return;
+                if(board[brr][bcc]) return;
+                add(nr, nc);
+            });
+            break;
+        case '車':
+            for(let k = r - 1; k >= 0; k--){ add(k, c); if(board[k][c]) break; }
+            for(let k = r + 1; k < 10; k++){ add(k, c); if(board[k][c]) break; }
+            for(let k = c - 1; k >= 0; k--){ add(r, k); if(board[r][k]) break; }
+            for(let k = c + 1; k < 9; k++){ add(r, k); if(board[r][k]) break; }
+            break;
+        case '炮':
+        case '砲':
+            function scan(dr, dc){
+                let bridge = false;
+                let nr = r + dr;
+                let nc = c + dc;
+                while(nr >= 0 && nr < 10 && nc >= 0 && nc < 9){
+                    const t = board[nr][nc];
+                    if(!bridge){
+                        if(!t) moves.push([nr, nc]);
+                        else bridge = true;
+                    }else{
+                        if(t){
+                            if(t.c !== pc) moves.push([nr, nc]);
+                            break;
+                        }
+                    }
+                    nr += dr;
+                    nc += dc;
+                }
+            }
+            scan(-1, 0);
+            scan(1, 0);
+            scan(0, -1);
+            scan(0, 1);
+            break;
+        case '兵':
+        case '卒':
+            if(pc === 'red'){
+                add(r - 1, c);
+                if(r <= 4){ add(r, c - 1); add(r, c + 1); }
+            }else{
+                add(r + 1, c);
+                if(r >= 5){ add(r, c - 1); add(r, c + 1); }
+            }
+            break;
+    }
+    return moves;
+}
+
+function restartGame(){
+    board = JSON.parse(JSON.stringify(initBoard));
+    turn = 'red';
+    sel = null;
+    hintList = [];
+    history = [];
+    winMask.style.display = 'none';
+    render();
+}
+
+canvas.onclick = clickCanvas;
+window.addEventListener('resize', () => {
+    resizeCanvas();
+    render();
+});
+
+resizeCanvas();
+restartGame();
+</script>
+</body>
+</html>
